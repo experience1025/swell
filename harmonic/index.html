@@ -1,0 +1,2143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>谐律 · Harmonic</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #FBFAF6; }
+  body { -webkit-font-smoothing: antialiased; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: default; }
+  #out { position: absolute; left: 0; top: 0; margin: 0; font: 12px/1.5 Consolas, monospace; white-space: pre; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<pre id="out"></pre>
+<script>
+/* 谐律 · Harmonic — 用三角函数合成和弦
+ * 纯 Canvas2D，无依赖，file:// 直接可玩。
+ */
+(() => {
+  'use strict';
+
+  // ---------------------------------------------------------------- 常量
+  const W = 1600, H = 900;
+
+  const PAPER = '#FBFAF6';
+  const INK = '#1A222E';
+  const INK_SOFT = '#7A8290';
+  const INK_FAINT = '#B4BAC4';
+  const LINE = '#E4E0D7';
+  const ACCENT = '#CF4824';
+  const ACCENT_SOFT = '#E89E80';
+  const ACCENT_WASH = 'rgba(207,72,36,0.10)';
+
+  const RUNE = { x0: 200, x1: 1400, cy: 345, scale: 92 };
+  const SLOT = { w: 124, h: 112, gap: 26, y: 596 };
+  const DECK = { w: 88, h: 84, gap: 14, y: 760 };
+  const METER = { x: 600, w: 400, y: 540 };
+
+  const WIN_TITLES = ['音落成章', '众声归一', '众声归一', '众声归一', '众声归一', '众声归一', '潮起', '涟漪'];
+  const MAIN = 6;
+
+  const PASS = 0.87;
+  const PERFECT = 0.97;
+
+  const FONT = '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif';
+  const SEAL_FONT = '"KaiTi", "STKaiti", "SimSun", serif';
+
+  // ---------------------------------------------------------------- 关卡
+  // 目标 = 若干正弦叠加；卡池里振幅固定，相位由玩家转。
+  const LEVELS = [
+    {
+      name: '单音',
+      sub: '一条正弦，先学会转相位',
+      target: [{ f: 1, a: 1.0, phase: Math.PI / 2 }],
+      deck: [{ f: 1, a: 1.0 }],
+      slots: 1,
+      timbre: 'guitar',
+      phaseHint: true,
+      hint: '拖动外圈，把波峰转到位',
+    },
+    {
+      name: '双音',
+      sub: '两条正弦，选对频率再对相位',
+      target: [
+        { f: 1, a: 1.0, phase: 0 },
+        { f: 2, a: 0.6, phase: Math.PI },
+      ],
+      deck: [
+        { f: 1, a: 1.0 },
+        { f: 2, a: 0.6 },
+        { f: 3, a: 0.5 },
+      ],
+      slots: 2,
+      timbre: 'piano',
+      sound: 'note',
+      phaseHint: true,
+      hint: '有一张是干扰项',
+    },
+    {
+      name: '和弦',
+      sub: '三条奇次谐波，方波的雏形',
+      target: [
+        { f: 1, a: 1.0, phase: 0 },
+        { f: 3, a: 1 / 3, phase: 0 },
+        { f: 5, a: 0.2, phase: 0 },
+      ],
+      deck: [
+        { f: 1, a: 1.0 },
+        { f: 3, a: 1 / 3 },
+        { f: 5, a: 0.2 },
+        { f: 7, a: 1 / 7 },
+      ],
+      slots: 3,
+      timbre: 'guzheng',
+      hint: '三张都要，相位对齐',
+    },
+    {
+      name: '拍音',
+      sub: '两条相近的频率，会撞出周期性的强弱',
+      target: [
+        { f: 4, a: 1.0, phase: 0 },
+        { f: 5, a: 1.0, phase: 0 },
+      ],
+      deck: [
+        { f: 4, a: 1.0 },
+        { f: 5, a: 1.0 },
+        { f: 6, a: 1.0 },
+      ],
+      slots: 2,
+      timbre: 'marimba',
+      scale: 0.75,
+      hint: '4× 与 5×，撞出一拍拍强弱',
+    },
+    {
+      name: '泛音',
+      sub: '钟的泛音是不成整数倍的，但这一关是',
+      target: [
+        { f: 1, a: 1.0, phase: 0 },
+        { f: 2, a: 0.5, phase: 0 },
+        { f: 4, a: 0.25, phase: 0 },
+      ],
+      deck: [
+        { f: 1, a: 1.0 },
+        { f: 2, a: 0.5 },
+        { f: 3, a: 0.4 },
+        { f: 4, a: 0.25 },
+        { f: 5, a: 0.2 },
+      ],
+      slots: 3,
+      timbre: 'bell',
+      hint: '三倍频是干扰项',
+    },
+    {
+      name: '全奏',
+      sub: '四个声部同时进入——最后的乐句',
+      target: [
+        { f: 1, a: 1.0, phase: 0 },
+        { f: 2, a: 0.6, phase: 0 },
+        { f: 3, a: 0.4, phase: 0 },
+        { f: 4, a: 0.25, phase: 0 },
+      ],
+      deck: [
+        { f: 1, a: 1.0 },
+        { f: 2, a: 0.6 },
+        { f: 3, a: 0.4 },
+        { f: 4, a: 0.25 },
+        { f: 5, a: 0.2 },
+      ],
+      slots: 4,
+      timbre: 'strings',
+      hint: '五个候选，四个槽位',
+    },
+
+    // ------------------------------ 彩蛋（按 7 / 8）
+    {
+      bonus: true,
+      name: '潮',
+      sub: '谐波按 1/n 递减，叠成一道涌浪',
+      target: [
+        { f: 1, a: 1.0, phase: 0 },
+        { f: 2, a: 0.5, phase: 0 },
+        { f: 3, a: 1 / 3, phase: 0 },
+        { f: 4, a: 0.25, phase: 0 },
+      ],
+      deck: [
+        { f: 1, a: 1.0 },
+        { f: 2, a: 0.5 },
+        { f: 3, a: 1 / 3 },
+        { f: 4, a: 0.25 },
+        { f: 5, a: 0.2 },
+      ],
+      slots: 4,
+      timbre: 'strings',
+      scale: 0.72,
+      hint: '彩蛋 · 振幅取倒数',
+    },
+    {
+      bonus: true,
+      name: '涟',
+      sub: '三条偶次谐波，相位各差 90°',
+      target: [
+        { f: 2, a: 1.0, phase: 0 },
+        { f: 4, a: 0.5, phase: Math.PI / 2 },
+        { f: 6, a: 1 / 3, phase: Math.PI },
+      ],
+      deck: [
+        { f: 2, a: 1.0 },
+        { f: 4, a: 0.5 },
+        { f: 6, a: 1 / 3 },
+        { f: 3, a: 0.4 },
+        { f: 8, a: 0.25 },
+      ],
+      slots: 3,
+      timbre: 'bell',
+      scale: 0.66,
+      hint: '彩蛋 · 相位差 90°',
+    },
+  ];
+  // ---------------------------------------------------------------- 音频
+  const Sound = {
+    ctx: null,
+    master: null,
+    rev: null,
+    timbre: 0,
+    muted: false,
+    cache: new Map(),
+
+    init() {
+      if (this.ctx) return;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try {
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = 0.55;
+        this.master.connect(this.ctx.destination);
+
+        const conv = this.ctx.createConvolver();
+        conv.buffer = this.makeIR(1.6, 3.2);
+        const wet = this.ctx.createGain();
+        wet.gain.value = 0.18;
+        conv.connect(wet).connect(this.master);
+        this.rev = conv;
+      } catch (e) {
+        this.ctx = null;
+      }
+    },
+
+    resume() {
+      if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+    },
+
+    makeIR(dur, decay) {
+      const rate = this.ctx.sampleRate;
+      const len = Math.floor(rate * dur);
+      const buf = this.ctx.createBuffer(2, len, rate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = buf.getChannelData(ch);
+        for (let i = 0; i < len; i++) {
+          d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        }
+      }
+      return buf;
+    },
+
+    // 每条谐波对应一个音高：f=1 → C3，往上是自然泛音列
+    freq(f) {
+      return 130.81 * f;
+    },
+
+    // 每条谐波对应一个音高：f=1 → C3
+    freq(f) {
+      return 130.81 * f;
+    },
+
+    // Karplus-Strong：噪声激励 + 延迟线低通反馈，物理建模吉他
+    pluckBuffer(f, detune = 0) {
+      const key = f + ':' + detune.toFixed(3);
+      if (this.cache.has(key)) return this.cache.get(key);
+
+      const sr = this.ctx.sampleRate;
+      const freq = this.freq(f) * (1 + detune);
+      const dur = 3.0;
+      const N = Math.max(2, Math.round(sr / freq));
+      const len = Math.floor(sr * dur);
+      const buf = this.ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+
+      const ring = new Float32Array(N);
+      for (let i = 0; i < N; i++) ring[i] = Math.random() * 2 - 1;
+
+      const blend = 0.5;
+      const damp = 0.9985;
+
+      let idx = 0;
+      for (let i = 0; i < len; i++) {
+        const cur = ring[idx];
+        const nxt = ring[(idx + 1) % N];
+        d[i] = cur;
+        ring[idx] = (blend * cur + (1 - blend) * nxt) * damp;
+        idx = (idx + 1) % N;
+      }
+
+      const tail = Math.floor(sr * 0.12);
+      for (let i = 0; i < tail; i++) d[len - 1 - i] *= i / tail;
+
+      this.cache.set(key, buf);
+      return buf;
+    },
+
+    pickBuffer() {
+      if (this.pickBuf) return this.pickBuf;
+      const sr = this.ctx.sampleRate;
+      const len = Math.floor(sr * 0.05);
+      const buf = this.ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 12);
+      }
+      this.pickBuf = buf;
+      return buf;
+    },
+
+    // 吉他：一次拨弦
+    guitar(f, opts = {}) {
+      if (!this.ctx || this.muted) return;
+      const { gain = 0.18, when = 0, detune = 0, pan = 0, bright = 1 } = opts;
+      const t0 = this.ctx.currentTime + when;
+
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.pluckBuffer(f, detune);
+
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 80;
+
+      const body = this.ctx.createBiquadFilter();
+      body.type = 'peaking';
+      body.frequency.value = 210;
+      body.Q.value = 1.1;
+      body.gain.value = 3.5;
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 3400 * bright;
+      lp.Q.value = 0.5;
+
+      const g = this.ctx.createGain();
+      g.gain.value = gain;
+
+      src.connect(hp).connect(body).connect(lp).connect(g);
+
+      const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+      if (panner) {
+        panner.pan.value = Math.max(-1, Math.min(1, pan));
+        g.connect(panner);
+        panner.connect(this.master);
+        if (this.rev) panner.connect(this.rev);
+      } else {
+        g.connect(this.master);
+        if (this.rev) g.connect(this.rev);
+      }
+
+      src.start(t0);
+
+      const pick = this.ctx.createBufferSource();
+      pick.buffer = this.pickBuffer();
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 2800;
+      bp.Q.value = 1.0;
+      const pg = this.ctx.createGain();
+      pg.gain.value = 0.045;
+      pick.connect(bp).connect(pg).connect(this.master);
+      pick.start(t0);
+    },
+
+    play(f, opts = {}) {
+      const inst = opts.inst || this.inst || 'guitar';
+      if (inst === 'marimba') return this.marimba(f, opts);
+      if (inst === 'bell') return this.bell(f, opts);
+      if (inst === 'strings') return this.strings(f, opts);
+      if (inst === 'piano') return this.piano(f, opts);
+      if (inst === 'guzheng') return this.guzheng(f, opts);
+      return this.guitar(f, opts);
+    },
+
+    // 钢琴：击弦噪声 + 略微失谐的泛音，衰减比木琴慢
+    piano(f, opts = {}) {
+      if (!this.ctx || this.muted) return;
+      const { gain = 0.15, when = 0, pan = 0, detune = 0 } = opts;
+      const t0 = this.ctx.currentTime + when;
+      const f0 = this.freq(f) * (1 + detune);
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(2800, t0);
+      lp.frequency.exponentialRampToValueAtTime(1300, t0 + 0.8);
+
+      const env = this.ctx.createGain();
+      lp.connect(env);
+      this.route(env, pan);
+
+      [[1, 1, 1.7], [2.003, 0.42, 1.05], [3.008, 0.18, 0.72], [4.02, 0.09, 0.5], [5.04, 0.05, 0.34]].forEach(([m, amp, dec]) => {
+        const o = this.ctx.createOscillator();
+        o.type = 'triangle';
+        o.frequency.value = Math.min(12000, f0 * m);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(gain * amp, t0 + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dec);
+        o.connect(g).connect(lp);
+        o.start(t0);
+        o.stop(t0 + dec + 0.05);
+      });
+
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.pickBuffer();
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 1900;
+      bp.Q.value = 0.9;
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(gain * 0.22, t0);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.07);
+      n.connect(bp).connect(ng);
+      this.route(ng, pan);
+      n.start(t0);
+    },
+
+    // 木琴：短促、木质，敲击后很快消失
+    marimba(f, opts = {}) {
+      if (!this.ctx || this.muted) return;
+      const { gain = 0.2, when = 0, pan = 0, detune = 0 } = opts;
+      const t0 = this.ctx.currentTime + when;
+      const f0 = this.freq(f) * (1 + detune);
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 4200;
+      lp.Q.value = 0.4;
+
+      const out = this.ctx.createGain();
+      out.gain.value = 1;
+      lp.connect(out);
+      this.route(out, pan);
+
+      [[1, 1, 0.85], [3.93, 0.3, 0.22], [9.2, 0.09, 0.1]].forEach(([m, amp, dec]) => {
+        const o = this.ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = Math.min(12000, f0 * m);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(gain * amp, t0 + 0.003);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dec);
+        o.connect(g).connect(lp);
+        o.start(t0);
+        o.stop(t0 + dec + 0.05);
+      });
+    },
+    // 古筝：明亮的拨弦，余音带一点按音的抖音
+    guzhengBuffer(f) {
+      const key = 'gz:' + f;
+      if (this.cache.has(key)) return this.cache.get(key);
+
+      const sr = this.ctx.sampleRate;
+      const freq = this.freq(f);
+      const dur = 2.6;
+      const len = Math.floor(sr * dur);
+      const buf = this.ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+
+      const N = Math.max(2, Math.round(sr / freq));
+      const ring = new Float32Array(N);
+      for (let i = 0; i < N; i++) ring[i] = (Math.random() * 2 - 1) * (i < N * 0.35 ? 1 : 0.55);
+
+      let idx = 0;
+      let peak = 0;
+      for (let i = 0; i < len; i++) {
+        const cur = ring[idx];
+        const nxt = ring[(idx + 1) % N];
+        ring[idx] = 0.9992 * (0.63 * cur + 0.37 * nxt);
+        d[i] = cur;
+        if (Math.abs(cur) > peak) peak = Math.abs(cur);
+        idx = (idx + 1) % N;
+      }
+
+      // 归一化：Karplus-Strong 出来的信号幅度很小，不拉满会听不见
+      if (peak > 0) {
+        const k = 0.9 / peak;
+        for (let i = 0; i < len; i++) d[i] *= k;
+      }
+
+      this.cache.set(key, buf);
+      return buf;
+    },
+
+    guzheng(f, opts = {}) {
+      if (!this.ctx || this.muted) return;
+      const { gain = 0.16, when = 0, pan = 0, detune = 0 } = opts;
+      const t0 = this.ctx.currentTime + when;
+
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.guzhengBuffer(f);
+      src.playbackRate.value = 1 + detune;
+
+      // 按音：起音之后 0.18 秒才出现的轻微抖音
+      const vib = this.ctx.createOscillator();
+      vib.frequency.value = 5.2;
+      const vg = this.ctx.createGain();
+      vg.gain.setValueAtTime(0, t0);
+      vg.gain.linearRampToValueAtTime(0.0075, t0 + 0.2);
+      vg.gain.linearRampToValueAtTime(0.0035, t0 + 1.3);
+      vib.connect(vg).connect(src.playbackRate);
+      vib.start(t0);
+      vib.stop(t0 + 1.7);
+
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 120;
+
+      const body = this.ctx.createBiquadFilter();
+      body.type = 'peaking';
+      body.frequency.value = 520;
+      body.Q.value = 1.0;
+      body.gain.value = 4;
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 6500;
+      lp.Q.value = 0.4;
+
+      const env = this.ctx.createGain();
+      env.gain.value = gain;
+
+      src.connect(hp).connect(body).connect(lp).connect(env);
+      this.route(env, pan);
+      src.start(t0);
+    },
+    // 钟：非整数泛音 + 长衰减
+    bell(f, opts = {}) {
+      if (!this.ctx || this.muted) return;
+      const { gain = 0.16, when = 0, pan = 0 } = opts;
+      const t0 = this.ctx.currentTime + when;
+      const f0 = this.freq(f);
+
+      const out = this.ctx.createGain();
+      out.gain.value = 1;
+      this.route(out, pan);
+
+      [[1, 1, 3.4], [2.76, 0.45, 2.1], [5.4, 0.22, 1.1], [8.93, 0.1, 0.6]].forEach(([m, amp, dec]) => {
+        const o = this.ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = Math.min(12000, f0 * m);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(gain * amp, t0 + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dec);
+        o.connect(g).connect(out);
+        o.start(t0);
+        o.stop(t0 + dec + 0.05);
+      });
+    },
+
+    // 弦乐：三支锯齿失谐 + 慢起音
+    strings(f, opts = {}) {
+      if (!this.ctx || this.muted) return;
+      const { gain = 0.12, when = 0, pan = 0, dur = 2.0 } = opts;
+      const t0 = this.ctx.currentTime + when;
+      const f0 = this.freq(f);
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 2000;
+      lp.Q.value = 0.4;
+
+      const env = this.ctx.createGain();
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(gain, t0 + 0.14);
+      env.gain.setValueAtTime(gain, t0 + dur * 0.55);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+      lp.connect(env);
+      this.route(env, pan);
+
+      [-0.005, 0, 0.005].forEach((d) => {
+        const o = this.ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = f0 * (1 + d);
+        const g = this.ctx.createGain();
+        g.gain.value = 0.34;
+        o.connect(g).connect(lp);
+        o.start(t0);
+        o.stop(t0 + dur + 0.05);
+      });
+    },
+
+    // 统一接到主输出与混响
+    route(node, pan) {
+      const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+      if (panner) {
+        panner.pan.value = Math.max(-1, Math.min(1, pan));
+        node.connect(panner);
+        panner.connect(this.master);
+        if (this.rev) panner.connect(this.rev);
+      } else {
+        node.connect(this.master);
+        if (this.rev) node.connect(this.rev);
+      }
+    },
+    // 一串音阶：以某个频率为起点，五声音阶上行 5 个音
+    run(f, when = 0) {
+      if (!this.ctx || this.muted) return;
+      const P = [1, 9 / 8, 5 / 4, 3 / 2, 2];
+      P.forEach((r, i) => {
+        this.play(f * r, {
+          gain: 0.085 * (1 - i * 0.1),
+          when: when + i * 0.055,
+          pan: -0.25 + i * 0.12,
+        });
+      });
+    },
+
+    // 转相位时的短音阶：3 个音，带节流，避免连发
+    phaseRun(f) {
+      if (!this.ctx || this.muted) return;
+      const now = performance.now();
+      if (now - (this._phaseLast || 0) < 90) return;
+      this._phaseLast = now;
+
+      const P = [1, 5 / 4, 3 / 2];
+      P.forEach((r, i) => {
+        this.play(f * r, {
+          gain: 0.05,
+          when: i * 0.045,
+          pan: -0.2 + i * 0.2,
+        });
+      });
+    },
+
+    // 笛子：正弦 + 轻微颤音 + 气声
+    flute(f, opts = {}) {
+      if (!this.ctx || this.muted) return;
+      const { gain = 0.1, when = 0, dur = 1.2 } = opts;
+      const t0 = this.ctx.currentTime + when;
+      const freq = this.freq(f);
+
+      const out = this.ctx.createGain();
+      out.gain.value = 0;
+      out.connect(this.master);
+      if (this.rev) out.connect(this.rev);
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 3800;
+      lp.Q.value = 0.4;
+      lp.connect(out);
+
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+
+      const osc2 = this.ctx.createOscillator();
+      osc2.type = 'triangle';
+      osc2.frequency.value = freq * 2;
+
+      const g2 = this.ctx.createGain();
+      g2.gain.value = 0.18;
+      osc2.connect(g2).connect(lp);
+
+      // 颤音
+      const lfo = this.ctx.createOscillator();
+      lfo.frequency.value = 5.2;
+      const lfoGain = this.ctx.createGain();
+      lfoGain.gain.value = freq * 0.005;
+      lfo.connect(lfoGain).connect(osc.frequency);
+      lfo.start(t0);
+      lfo.stop(t0 + dur + 0.4);
+
+      osc.connect(lp);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.3);
+
+      // 气声
+      const breath = this.ctx.createBufferSource();
+      breath.buffer = this.pickBuffer();
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 2200;
+      bp.Q.value = 0.8;
+      const bg = this.ctx.createGain();
+      bg.gain.value = 0.03;
+      breath.connect(bp).connect(bg).connect(this.master);
+      breath.start(t0);
+
+      out.gain.setValueAtTime(0, t0);
+      out.gain.linearRampToValueAtTime(gain, t0 + 0.07);
+      out.gain.setValueAtTime(gain, t0 + dur * 0.6);
+      out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    },
+    // 扫弦：从低到高依次拨
+    strum(comps, when = 0) {
+      if (!this.ctx || this.muted) return;
+      const notes = comps.map((c) => c.f).sort((a, b) => a - b);
+      const n = notes.length;
+      const spread = n > 1 ? 0.07 / (n - 1) : 0;
+
+      notes.forEach((f, i) => {
+        this.play(f, {
+          gain: 0.14,
+          when: when + i * spread,
+          detune: (Math.random() - 0.5) * 0.004,
+          pan: n > 1 ? (i / (n - 1)) * 0.6 - 0.3 : 0,
+        });
+        this.play(f, {
+          gain: 0.05,
+          when: when + i * spread + 0.005,
+          detune: 0.006,
+          pan: n > 1 ? -(i / (n - 1)) * 0.6 + 0.3 : 0,
+        });
+      });
+    },
+
+    chord(comps, when = 0) {
+      this.strum(comps, when);
+    },
+
+    // 每关不同的结算音乐
+    victory(level, comps) {
+      if (!this.ctx || this.muted) return;
+      const fs = comps.map((c) => c.f).sort((a, b) => a - b);
+      const root = fs[0];
+
+      const plans = [
+        { seq: [1, 5 / 4, 3 / 2, 1], step: 0.42, flutes: [[2, 0.5, 1.5]] },
+        { seq: [1, 9 / 8, 5 / 4, 3 / 2, 5 / 4, 1], step: 0.24, flutes: [[3, 0.6, 1.1], [4, 1.3, 0.8]] },
+        { seq: [1, 9 / 8, 5 / 4, 3 / 2, 2, 5 / 2], step: 0.16, flutes: [[4, 0.25, 1.3], [5, 1.1, 1.0]] },
+        { seq: [1, 5 / 4, 3 / 2, 2, 3 / 2, 5 / 4], step: 0.2, flutes: [[3, 0.4, 0.9]] },
+        { seq: [1, 2, 3, 4], step: 0.3, flutes: [[4, 0.6, 1.4]] },
+        { seq: [1, 2, 3, 4, 5], step: 0.22, flutes: [[5, 0.4, 1.2], [6, 1.0, 0.9]] },
+        { seq: [1, 2, 3, 4, 3, 2, 1], step: 0.19, flutes: [[6, 0.35, 1.5], [8, 1.2, 1.1]] },
+        { seq: [2, 4, 6, 4, 2], step: 0.27, flutes: [[3, 0.5, 1.4], [4, 1.5, 1.0]] },
+      ];
+      const plan = plans[level] || plans[0];
+
+      let t = 0.12;
+      plan.seq.forEach((r, i) => {
+        this.play(root * r, {
+          gain: 0.13,
+          when: t,
+          pan: -0.25 + (i % 3) * 0.2,
+        });
+        t += plan.step;
+      });
+
+      this.play(root * 0.5, { gain: 0.12, when: t });
+      this.strum(comps, t + 0.05);
+      plan.flutes.forEach(([f, w, d]) => this.flute(root * f, { gain: 0.07, when: w, dur: d }));
+    },
+    // 全部通关的终曲
+    finale() {
+      if (!this.ctx || this.muted) return;
+      const seq = [1, 5 / 4, 3 / 2, 2, 5 / 2, 3, 4];
+      seq.forEach((r, i) => {
+        this.play(r, { gain: 0.11, when: i * 0.22, pan: -0.35 + i * 0.1 });
+      });
+      this.strum([{ f: 1 }, { f: 2 }, { f: 3 }, { f: 5 }], seq.length * 0.22 + 0.1);
+      this.flute(4, { gain: 0.08, when: 0.4, dur: 1.6 });
+      this.flute(5, { gain: 0.06, when: 1.4, dur: 1.2 });
+    },
+    thump(when = 0) {
+      if (!this.ctx || this.muted) return;
+      const t = this.ctx.currentTime + when;
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(110, t);
+      o.frequency.exponentialRampToValueAtTime(52, t + 0.35);
+      g.gain.setValueAtTime(0.18, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+      o.connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.55);
+    },
+  };
+
+  // ---------------------------------------------------------------- 数学
+  function waveSum(comps, u) {
+    let y = 0;
+    for (let i = 0; i < comps.length; i++) {
+      const c = comps[i];
+      y += c.a * Math.sin(2 * Math.PI * c.f * u + c.phase);
+    }
+    return y;
+  }
+
+  function sampleY(fn, n) {
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = fn(i / (n - 1));
+    return out;
+  }
+
+  function matchRatio(player, target) {
+    const N = 512;
+    let se = 0, st = 0;
+    for (let i = 0; i < N; i++) {
+      const u = i / (N - 1);
+      const p = waveSum(player, u);
+      const t = waveSum(target, u);
+      se += (p - t) * (p - t);
+      st += t * t;
+    }
+    if (st < 1e-9) return 0;
+    const err = Math.sqrt(se / st);
+    return Math.max(0, Math.min(1, 1 - err));
+  }
+
+  // ---------------------------------------------------------------- 画布
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let dpr = 1, scale = 1, ox = 0, oy = 0;
+
+  function layout() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = window.innerWidth, h = window.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    scale = Math.min(w / W, h / H);
+    ox = (w - W * scale) / 2;
+    oy = (h - H * scale) / 2;
+  }
+  window.addEventListener('resize', layout);
+
+  function toDesign(cx, cy) {
+    return { x: (cx - ox) / scale, y: (cy - oy) / scale };
+  }
+
+  // ---------------------------------------------------------------- 状态
+  const st = {
+    level: 0,
+    slots: [],
+    deck: [],
+    match: 0,
+    won: false,
+    wonAt: 0,
+    drag: null,
+    rotating: null,
+    hoverSlot: -1,
+    time: 0,
+    hintFlash: 0,
+    selected: -1,
+    lastCast: -99,
+    finale: false,
+    fw: null,
+    finaleAt: 0,
+    editing: -1,
+    editText: '',
+  };
+
+  function loadLevel(i) {
+    st.level = Math.max(0, Math.min(LEVELS.length - 1, i));
+    const L = LEVELS[st.level];
+    st.slots = new Array(L.slots).fill(null);
+    st.deck = L.deck.map((c, idx) => ({ ...c, id: idx, used: false }));
+    st.match = 0;
+    st.won = false;
+    st.wonAt = 0;
+    st.drag = null;
+    st.rotating = null;
+    st.finale = false;
+    st.burst = null;
+    st.fw = null;
+    st.selected = -1;
+    Sound.inst = L.timbre || 'guitar';
+  }
+
+  function playerComps() {
+    return st.slots.filter(Boolean).map((s) => ({ f: s.f, a: s.a, phase: s.phase }));
+  }
+
+  function updateMatch() {
+    const L = LEVELS[st.level];
+    const p = playerComps();
+    st.match = p.length ? matchRatio(p, L.target) : 0;
+  }
+
+  // ---------------------------------------------------------------- 几何
+  function slotRects() {
+    const n = st.slots.length;
+    const total = n * SLOT.w + (n - 1) * SLOT.gap;
+    const x0 = (W - total) / 2;
+    return st.slots.map((_, i) => ({
+      x: x0 + i * (SLOT.w + SLOT.gap),
+      y: SLOT.y,
+      w: SLOT.w,
+      h: SLOT.h,
+    }));
+  }
+
+  function deckRects() {
+    const n = st.deck.length;
+    const total = n * DECK.w + (n - 1) * DECK.gap;
+    const x0 = (W - total) / 2;
+    return st.deck.map((_, i) => ({
+      x: x0 + i * (DECK.w + DECK.gap),
+      y: DECK.y,
+      w: DECK.w,
+      h: DECK.h,
+    }));
+  }
+
+  function inRect(p, r, pad = 0) {
+    return p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad;
+  }
+
+  function slotCenter(i) {
+    const r = slotRects()[i];
+    return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+  }
+
+  // ---------------------------------------------------------------- 绘制工具
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(x, y, w, h, r);
+    } else {
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+  }
+
+  function text(str, x, y, size, color, align = 'left', bold = false, family = FONT) {
+    ctx.font = `${bold ? '600 ' : ''}${size}px ${family}`;
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(str, x, y);
+  }
+
+  function dashedLine(pts, color, width, dash) {
+    ctx.save();
+    ctx.setLineDash(dash || [6, 6]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function curvePoints(comps, n = 360, k = 1) {
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const u = i / n;
+      const x = RUNE.x0 + (RUNE.x1 - RUNE.x0) * u;
+      const y = RUNE.cy - waveSum(comps, u) * RUNE.scale * k;
+      pts.push({ x, y });
+    }
+    return pts;
+  }
+
+  // ---------------------------------------------------------------- 绘制
+  function draw() {
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, W, H);
+
+    if (st.finale) {
+      drawFinale();
+      if (window.__selftest) drawSelftestPanel();
+      return;
+    }
+
+    drawHeader();
+    drawRune();
+    drawMeter();
+    drawSlots();
+    drawDeck();
+    drawHint();
+    drawDrag();
+    if (st.won && !st.finale) drawSeal();
+    if (window.__selftest) drawSelftestPanel();
+  }
+
+  function drawSelftestPanel() {
+    const lines = window.__selftest;
+    ctx.save();
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, W, H);
+    text('SELFTEST', 60, 60, 24, INK, 'left', true);
+    const half = Math.ceil(lines.length / 2);
+    lines.forEach((l, i) => {
+      const bad = l.startsWith('FAIL');
+      const col = i < half ? 0 : 1;
+      const row = i < half ? i : i - half;
+      text(l, 60 + col * 790, 104 + row * 24, 14, bad ? ACCENT : '#2E7D5B', 'left', false, 'Consolas, monospace');
+    });
+    ctx.restore();
+  }
+
+  function drawHeader() {
+    text('谐律', 96, 82, 44, INK, 'left', true);
+    text('H A R M O N I C', 100, 118, 12, INK_FAINT, 'left', false);
+    text('把几条正弦叠成一段和声', 300, 78, 16, INK_SOFT);
+
+    const L = LEVELS[st.level];
+    text(L.name, W - 96, 76, 26, INK, 'right', true);
+    if (L.bonus) {
+      text(`彩蛋 ${st.level - MAIN + 1} / ${LEVELS.length - MAIN}`, W - 96, 104, 13, ACCENT, 'right');
+    } else {
+      text(`${String(st.level + 1).padStart(2, '0')} / 0${MAIN}`, W - 96, 104, 13, INK_FAINT, 'right');
+    }
+
+    ctx.strokeStyle = LINE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(96, 136);
+    ctx.lineTo(W - 96, 136);
+    ctx.stroke();
+  }
+
+  function drawRune() {
+    // 基线
+    dashedLine(
+      [{ x: RUNE.x0, y: RUNE.cy }, { x: RUNE.x1, y: RUNE.cy }],
+      '#EDE9E0', 1, [2, 8]
+    );
+
+    const L = LEVELS[st.level];
+    const target = curvePoints(L.target, 360, L.scale || 1);
+    const player = playerComps();
+    const mine = player.length ? curvePoints(player, 360, L.scale || 1) : null;
+
+    // 差异填充
+    if (mine) {
+      const alpha = Math.min(0.16, 0.06 + (1 - st.match) * 0.12);
+      ctx.save();
+      ctx.fillStyle = `rgba(207,72,36,${alpha.toFixed(3)})`;
+      ctx.beginPath();
+      target.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      for (let i = mine.length - 1; i >= 0; i--) ctx.lineTo(mine[i].x, mine[i].y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // 目标（虚线）
+    dashedLine(target, 'rgba(26,34,46,0.30)', 2, [7, 7]);
+
+    // 玩家曲线
+    if (mine) {
+      ctx.save();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2.2;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      mine.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      ctx.stroke();
+      ctx.restore();
+
+      // 沿线流动的小点
+      for (let k = 0; k < 3; k++) {
+        const u = (st.time * 0.12 + k / 3) % 1;
+        const x = RUNE.x0 + (RUNE.x1 - RUNE.x0) * u;
+        const y = RUNE.cy - waveSum(player, u) * RUNE.scale;
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(207,72,36,0.55)';
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawMeter() {
+    const m = st.match;
+    const hit = m >= PASS;
+
+    if (hit) {
+      const a = 0.6 + 0.4 * Math.sin(st.time * 5);
+      text('空格 施法', METER.x, METER.y - 22, 14, `rgba(207,72,36,${a.toFixed(2)})`, 'left', true);
+    } else {
+      text('贴合度', METER.x, METER.y - 22, 14, INK_SOFT);
+    }
+    text(`${Math.round(m * 100)}%`, METER.x + METER.w, METER.y - 22, 14, hit ? ACCENT : INK_SOFT, 'right', hit);
+
+    // 轨道
+    roundRect(METER.x, METER.y, METER.w, 8, 4);
+    ctx.fillStyle = '#EDE9E0';
+    ctx.fill();
+
+    // 进度
+    if (m > 0.001) {
+      roundRect(METER.x, METER.y, Math.max(8, METER.w * m), 8, 4);
+      ctx.fillStyle = hit ? ACCENT : '#9AA3B0';
+      ctx.fill();
+    }
+
+    // 92% 阈值刻度
+    const tx = METER.x + METER.w * PASS;
+    ctx.strokeStyle = INK_FAINT;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(tx, METER.y - 6);
+    ctx.lineTo(tx, METER.y + 14);
+    ctx.stroke();
+  }
+
+  function drawCardBody(x, y, w, h, card, placed, slotIndex) {
+    const hover = !!(st.rotating && st.rotating.slot === slotIndex);
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(26,34,46,0.08)';
+    ctx.shadowBlur = hover ? 18 : 10;
+    ctx.shadowOffsetY = hover ? 6 : 3;
+
+    roundRect(x, y, w, h, 12);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.restore();
+
+    ctx.strokeStyle = hover ? ACCENT_SOFT : '#E7E3DA';
+    ctx.lineWidth = hover ? 2 : 1;
+    roundRect(x, y, w, h, 12);
+    ctx.stroke();
+
+    // 频率标签
+    text(`${card.f}×`, x + 14, y + 30, placed ? 27 : 21, INK, 'left', true);
+
+    // 迷你波形
+    const gx0 = x + 12, gx1 = x + w - 12, gy = y + h - (placed ? 30 : 24);
+    const amp = placed ? 12 : 9;
+    ctx.strokeStyle = 'rgba(26,34,46,0.35)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    const cycles = Math.min(card.f, 5);
+    for (let i = 0; i <= 40; i++) {
+      const t = i / 40;
+      const px = gx0 + (gx1 - gx0) * t;
+      const py = gy - Math.sin(t * Math.PI * 2 * cycles) * amp;
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    }
+    ctx.stroke();
+  }
+
+  function drawSlots() {
+    const rects = slotRects();
+    rects.forEach((r, i) => {
+      const s = st.slots[i];
+      if (!s) {
+        ctx.save();
+        ctx.setLineDash([6, 6]);
+        ctx.strokeStyle = '#DCD7CC';
+        ctx.lineWidth = 1.5;
+        roundRect(r.x, r.y, r.w, r.h, 12);
+        ctx.stroke();
+        ctx.restore();
+        text('＋', r.x + r.w / 2, r.y + r.h / 2 + 12, 26, '#D6D1C6', 'center');
+        return;
+      }
+
+      drawCardBody(r.x, r.y, r.w, r.h, s, true, i);
+      if (st.selected === i) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(207,72,36,0.5)';
+        ctx.lineWidth = 1.5;
+        roundRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8, 15);
+        ctx.stroke();
+        ctx.restore();
+      }
+      drawPhaseRail(r, s, i);
+      drawPhaseValue(r, s, i);
+
+      // 移除按钮
+      const bx = r.x + r.w - 14, by = r.y + 14;
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(26,34,46,0.06)';
+      ctx.arc(bx, by, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(26,34,46,0.35)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(bx - 3.5, by - 3.5);
+      ctx.lineTo(bx + 3.5, by + 3.5);
+      ctx.moveTo(bx + 3.5, by - 3.5);
+      ctx.lineTo(bx - 3.5, by + 3.5);
+      ctx.stroke();
+    });
+  }
+
+  // 卡片右侧的竖直滑轨：底端 0°，顶端 360°
+  function phaseRailRect(r) {
+    return { x: r.x + r.w + 9, y: r.y + 10, w: 12, h: r.h - 20 };
+  }
+
+  function drawPhaseRail(r, s, i) {
+    const rail = phaseRailRect(r);
+    const x = rail.x + rail.w / 2;
+    const twoPi = Math.PI * 2;
+    const k = (((s.phase % twoPi) + twoPi) % twoPi) / twoPi;
+    const y = rail.y + (1 - k) * rail.h;
+    const hot = !!(st.rotating && st.rotating.slot === i);
+
+    ctx.save();
+    ctx.lineCap = 'round';
+
+    // 托底，把滑轨和卡片视觉上连起来
+    ctx.fillStyle = 'rgba(26,34,46,0.035)';
+    roundRect(rail.x - 4, rail.y - 6, rail.w + 8, rail.h + 12, 9);
+    ctx.fill();
+
+    // 轨道
+    ctx.strokeStyle = 'rgba(26,34,46,0.12)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, rail.y);
+    ctx.lineTo(x, rail.y + rail.h);
+    ctx.stroke();
+
+    // 已走过的部分
+    ctx.strokeStyle = ACCENT_SOFT;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, rail.y + rail.h);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+
+    // 刻度（0 / 90 / 180 / 270 / 360）
+    ctx.strokeStyle = 'rgba(26,34,46,0.16)';
+    ctx.lineWidth = 1;
+    [0, 0.25, 0.5, 0.75, 1].forEach((t) => {
+      const ty = rail.y + (1 - t) * rail.h;
+      ctx.beginPath();
+      ctx.moveTo(x - 7, ty);
+      ctx.lineTo(x - 3, ty);
+      ctx.stroke();
+    });
+
+    // 手柄
+    ctx.beginPath();
+    ctx.fillStyle = hot ? ACCENT : PAPER;
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 2;
+    ctx.arc(x, y, 5, 0, twoPi);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    if (hot) {
+      const deg = Math.round(((s.phase * 180) / Math.PI) % 360);
+      text(`${deg}°`, x, rail.y + rail.h + 18, 13, ACCENT, 'center', true);
+    }
+  }
+
+  function drawPhaseValue(r, s, i) {
+    const deg = ((s.phase * 180) / Math.PI) % 360;
+    const shown = String(Math.round(deg)).padStart(3, '0') + '°';
+    const hot = !!(st.rotating && st.rotating.slot === i);
+    text(shown, r.x + r.w / 2, r.y + r.h + 20, 13, hot ? ACCENT : 'rgba(26,34,46,0.42)', 'center', hot);
+  }
+  function drawDeck() {
+    const rects = deckRects();
+    rects.forEach((r, i) => {
+      const card = st.deck[i];
+      if (card.used) {
+        ctx.save();
+        ctx.globalAlpha = 0.28;
+        drawCardBody(r.x, r.y, r.w, r.h, card, false, -1);
+        ctx.restore();
+        return;
+      }
+      drawCardBody(r.x, r.y, r.w, r.h, card, false, -1);
+    });
+  }
+
+  function drawHint() {
+    const L = LEVELS[st.level];
+    text(L.sub, W / 2, 178, 15, INK_SOFT, 'center');
+    text(L.hint, W / 2, 866, 14, '#9AA1AC', 'center');
+    text('1–6 选关   ·   ↑↓ 相位   ·   ←→ 换卡   ·   拖卡片/滑轨也可调   ·   R 重来', W - 96, 892, 15, '#A8AFB9', 'right');
+  }
+
+  function drawDrag() {
+    if (!st.drag) return;
+    const d = st.drag;
+    const card = st.deck[d.deckIdx];
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.shadowColor = 'rgba(26,34,46,0.18)';
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 10;
+    drawCardBody(d.x - DECK.w / 2, d.y - DECK.h / 2, DECK.w, DECK.h, card, false, -1);
+    ctx.restore();
+
+    // 高亮目标槽（空槽=放入，占用=替换）
+    if (st.hoverSlot >= 0) {
+      const r = slotRects()[st.hoverSlot];
+      const occupied = !!st.slots[st.hoverSlot];
+      ctx.save();
+      ctx.strokeStyle = occupied ? 'rgba(207,72,36,0.55)' : ACCENT_SOFT;
+      ctx.lineWidth = 2;
+      ctx.setLineDash(occupied ? [] : [5, 5]);
+      roundRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8, 14);
+      ctx.stroke();
+      ctx.restore();
+      if (occupied) {
+        text('替换', r.x + r.w / 2, r.y - 14, 13, ACCENT, 'center', true);
+      }
+    }
+  }
+
+  // 印章碎成粒子 + 红色波纹扩散
+  function makeBurst() {
+    const size = 170;
+    const N = 15;
+    const parts = [];
+    for (let i = 0; i < N; i++) {
+      for (let j = 0; j < N; j++) {
+        if (Math.random() < 0.4) continue;
+        const px = (i + 0.5) / N - 0.5;
+        const py = (j + 0.5) / N - 0.5;
+        const d = Math.hypot(px, py) || 0.001;
+        parts.push({
+          x: px * size,
+          y: py * size,
+          vx: (px / d) * (110 + Math.random() * 210),
+          vy: (py / d) * (110 + Math.random() * 210) - 40,
+          size: 2 + Math.random() * 4,
+          spin: Math.random() * Math.PI,
+          delay: Math.random() * 0.12,
+        });
+      }
+    }
+    return { parts, rings: [0, 0.11, 0.22, 0.34] };
+  }
+
+  function drawBurst(b, age) {
+    const cx = W / 2, cy = 352;
+
+    // 起爆闪光
+    if (age < 0.2) {
+      const k = age / 0.2;
+      ctx.save();
+      ctx.globalAlpha = 0.22 * (1 - k);
+      ctx.fillStyle = ACCENT;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 120 * (0.4 + k), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // 波纹
+    b.rings.forEach((delay) => {
+      const a = age - delay;
+      if (a <= 0 || a > 1.05) return;
+      const k = a / 1.05;
+      ctx.save();
+      ctx.globalAlpha = (1 - k) * 0.34;
+      ctx.strokeStyle = ACCENT;
+      ctx.lineWidth = 3.5 * (1 - k) + 0.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 60 + k * 400, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    // 碎块
+    b.parts.forEach((p) => {
+      const a = age - 0.04 - p.delay;
+      if (a <= 0 || a > 1.0) return;
+      const x = cx + p.x + p.vx * a;
+      const y = cy + p.y + p.vy * a + 200 * a * a;
+      const alpha = Math.max(0, 1 - a / 1.0);
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.92;
+      ctx.fillStyle = ACCENT;
+      ctx.translate(x, y);
+      ctx.rotate(p.spin + a * 3.2);
+      ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+      ctx.restore();
+    });
+  }
+
+  function drawSeal() {
+    const age = st.time - st.wonAt;
+    const veil = Math.min(1, age / 0.12);
+    const burstAge = age - 0.28;
+    const sealFade = burstAge <= 0 ? 1 : Math.max(0, 1 - burstAge / 0.14);
+    if (burstAge > 0 && !st.burst) st.burst = makeBurst();
+
+    ctx.save();
+    ctx.fillStyle = `rgba(251,250,246,${(0.96 * veil).toFixed(3)})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+
+    const cx = W / 2, cy = 352;
+
+    // 印章一开始就在，不落下，直接碎开
+    if (sealFade > 0) {
+      const size = 170;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((-8 * Math.PI) / 180);
+      ctx.globalAlpha = 0.94 * sealFade;
+
+      roundRect(-size / 2, -size / 2, size, size, 10);
+      ctx.fillStyle = ACCENT;
+      ctx.fill();
+
+      text('律', 0, 42, 108, PAPER, 'center', true, SEAL_FONT);
+      ctx.restore();
+    }
+
+    if (st.burst && burstAge > 0) drawBurst(st.burst, burstAge);
+
+    const ta = Math.max(0, Math.min(1, (age - 0.5) / 0.35));
+    if (ta > 0) {
+      ctx.save();
+      ctx.globalAlpha = ta;
+      text(WIN_TITLES[st.level] || '众声归一', W / 2, 574, 40, INK, 'center', true);
+      text(`贴合度 ${Math.round(st.match * 100)}%${st.match >= PERFECT ? ' · 完美' : ''}`, W / 2, 616, 16, INK_SOFT, 'center');
+      const tail = st.level === MAIN - 1 ? '空格 结束' : st.level === LEVELS.length - 1 ? '空格 回到开头' : '空格 继续';
+      text(tail, W / 2, 668, 15, ACCENT, 'center');
+      ctx.restore();
+    }
+  }
+  // ---------------------------------------------------------------- 终章：烟花
+  function isLast() {
+    return st.level === MAIN - 1;
+  }
+
+  function startFinale() {
+    st.finale = true;
+    st.finaleAt = st.time;
+    st.fw = { rockets: [], parts: [], flashes: [], next: 0.15, t: 0 };
+    Sound.finale();
+  }
+
+  const FW_COLORS = ['#CF4824', '#C9A227', '#2E7D6B', '#1A222E'];
+
+  function spawnRocket() {
+    const x = 200 + Math.random() * (W - 400);
+    st.fw.rockets.push({
+      x,
+      y: H + 20,
+      vy: -(760 + Math.random() * 220),
+      color: FW_COLORS[(Math.random() * FW_COLORS.length) | 0],
+      target: 380 + Math.random() * 300,
+    });
+  }
+
+  function burst(x, y, color) {
+    st.fw.flashes.push({ x, y, life: 0.3, max: 0.3, color });
+    const n = 74 + ((Math.random() * 30) | 0);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
+      const sp = i % 3 === 0 ? 60 + Math.random() * 100 : 190 + Math.random() * 70;
+      st.fw.parts.push({
+        x, y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 1.1 + Math.random() * 0.7,
+        max: 1.8,
+        color: Math.random() < 0.25 ? FW_COLORS[(Math.random() * FW_COLORS.length) | 0] : color,
+        size: 2.6 + Math.random() * 2.4,
+      });
+    }
+  }
+
+  function updateFinale(dt) {
+    if (!st.fw) return;
+    st.fw.t += dt;
+
+    if (st.fw.t < 9 && st.fw.t > st.fw.next) {
+      spawnRocket();
+      if (Math.random() < 0.45) spawnRocket();
+      st.fw.next = st.fw.t + 0.3 + Math.random() * 0.4;
+    }
+
+    st.fw.rockets.forEach((r) => {
+      r.y += r.vy * dt;
+      r.vy += 520 * dt;
+      if (r.y <= r.target || r.vy > -120) {
+        burst(r.x, r.y, r.color);
+        r.dead = true;
+      }
+    });
+    st.fw.rockets = st.fw.rockets.filter((r) => !r.dead);
+
+    st.fw.parts.forEach((p) => {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 240 * dt;
+      p.vx *= 0.994;
+      p.vy *= 0.994;
+      p.life -= dt;
+    });
+    st.fw.parts = st.fw.parts.filter((p) => p.life > 0);
+
+    st.fw.flashes.forEach((f) => {
+      f.life -= dt;
+    });
+    st.fw.flashes = st.fw.flashes.filter((f) => f.life > 0);
+  }
+
+  function drawFinale() {
+    const t = Math.min(1, (st.time - st.finaleAt) / 0.6);
+    ctx.save();
+    ctx.fillStyle = `rgba(251,250,246,${(0.94 * t).toFixed(3)})`;
+    ctx.fillRect(0, 0, W, H);
+
+    if (st.fw) {
+      st.fw.rockets.forEach((r) => {
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = '#B4BAC4';
+        ctx.fillRect(r.x - 1, r.y, 2, 14);
+      });
+
+      st.fw.flashes.forEach((f) => {
+        const k = 1 - f.life / f.max;
+        ctx.globalAlpha = (1 - k) * 0.3;
+        ctx.fillStyle = f.color;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, 20 + k * 70, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      st.fw.parts.forEach((p) => {
+        const a = Math.max(0, Math.min(1, p.life / p.max));
+        ctx.globalAlpha = a * 0.12;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = a;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+    ctx.restore();
+
+    const fade = Math.min(1, Math.max(0, (st.time - st.finaleAt - 0.8) / 0.8));
+    if (fade > 0) {
+      ctx.save();
+      ctx.globalAlpha = fade;
+      text('全部通关', W / 2, 236, 66, INK, 'center', true);
+      text('谐 律   ·   H A R M O N I C', W / 2, 280, 14, INK_FAINT, 'center');
+      text('六个音程，全部成形', W / 2, 314, 16, INK_SOFT, 'center');
+      text('按 7 / 8，还有两个彩蛋', W / 2, 352, 14, '#B4BAC4', 'center');
+      text('空格 重来一轮   ·   Esc 退出', W / 2, 860, 14, '#B4BAC4', 'center');
+      ctx.restore();
+    }
+  }
+  // ---------------------------------------------------------------- 输入
+  function pointerPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return toDesign(e.clientX - rect.left, e.clientY - rect.top);
+  }
+
+  function onDown(e) {
+    Sound.init();
+    Sound.resume();
+    if (st.won) return;
+
+    const p = pointerPos(e);
+
+
+    // 槽位：转相位 / 移除
+    const rects = slotRects();
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (!st.slots[i]) continue;
+      const bx = r.x + r.w - 14, by = r.y + 14;
+      if (Math.hypot(p.x - bx, p.y - by) < 14) {
+        removeFromSlot(i);
+        updateMatch();
+        return;
+      }
+      if (inRect(p, r, 12) || inRect(p, phaseRailRect(r), 8)) {
+        // 上下拖动：记录按下时的 y 与相位，向上拖 = 相位增加
+        st.rotating = {
+          slot: i,
+          y0: p.y,
+          p0: st.slots[i].phase,
+        };
+        st.selected = i;
+        canvas.style.cursor = 'ns-resize';
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        return;
+      }
+    }
+
+    // 卡池：拿起
+    const dr = deckRects();
+    for (let i = 0; i < dr.length; i++) {
+      if (!st.deck[i].used && inRect(p, dr[i])) {
+        st.drag = { deckIdx: i, x: p.x, y: p.y };
+        st.hoverSlot = -1;
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
+    }
+  }
+
+  function onMove(e) {
+    Sound.resume();
+    const p = pointerPos(e);
+
+    // 如果漏掉了 up 事件（比如在窗口外松手），下一次移动时按钮已经松开，就地结束拖拽
+    if ((st.drag || st.rotating) && e.buttons === 0) {
+      onUp(e);
+      return;
+    }
+
+    if (st.drag) {
+      st.drag.x = p.x;
+      st.drag.y = p.y;
+      st.hoverSlot = -1;
+      const rects = slotRects();
+      for (let i = 0; i < rects.length; i++) {
+        if (inRect(p, rects[i], 12)) {
+          st.hoverSlot = i;
+          break;
+        }
+      }
+      return;
+    }
+
+    if (st.rotating) {
+      dragPhase(p);
+      return;
+    }
+
+    // hover 状态
+    let cursor = 'default';
+    const rects = slotRects();
+    for (let i = 0; i < rects.length; i++) {
+      if (!st.slots[i]) continue;
+      if (inRect(p, rects[i], 12) || inRect(p, phaseRailRect(rects[i]), 8)) {
+        cursor = 'ns-resize';
+      }
+    }
+    deckRects().forEach((r, i) => {
+      if (!st.deck[i].used && inRect(p, r)) cursor = 'grab';
+    });
+    canvas.style.cursor = cursor;
+  }
+
+  function onUp(e) {
+    if (st.drag) {
+      const p = pointerPos(e);
+      const rects = slotRects();
+      for (let i = 0; i < rects.length; i++) {
+        if (inRect(p, rects[i], 16)) {
+          if (st.slots[i]) removeFromSlot(i);   // 直接替换：旧的退回卡池
+          placeCard(st.drag.deckIdx, i);
+          break;
+        }
+      }
+      st.drag = null;
+      st.hoverSlot = -1;
+    }
+    if (st.rotating) {
+      const slot = st.rotating.slot;
+      if (st.slots[slot]) Sound.play(st.slots[slot].f, { gain: 0.12 });
+      st.rotating = null;
+    }
+    canvas.style.cursor = 'default';
+  }
+
+  function removeFromSlot(slotIdx) {
+    const s = st.slots[slotIdx];
+    if (!s) return;
+    const card = st.deck[s.deckId];
+    card.used = false;
+    card.lastPhase = s.phase;      // 记住相位，放回来时沿用
+    st.slots[slotIdx] = null;
+    if (st.rotating && st.rotating.slot === slotIdx) st.rotating = null;
+  }
+
+  function placeCard(deckIdx, slotIdx) {
+    const card = st.deck[deckIdx];
+    card.used = true;
+
+    // 初始相位：目标相位偏开约 100°，保证每次放上去都要转一下
+    const tgt = LEVELS[st.level].target.find((t) => t.f === card.f);
+    const start = tgt
+      ? (tgt.phase + 1.75 + slotIdx * 0.6) % (Math.PI * 2)
+      : Math.random() * Math.PI * 2;
+
+    st.slots[slotIdx] = {
+      f: card.f,
+      a: card.a,
+      phase: card.lastPhase !== undefined ? card.lastPhase : start,
+      deckId: deckIdx,
+    };
+    st.selected = slotIdx;
+    if (LEVELS[st.level].sound === 'note') {
+      Sound.play(card.f, { gain: 0.15 });
+    } else {
+      Sound.run(card.f, 0);
+    }
+    updateMatch();
+  }
+
+  // 上下拖动：1 像素 = 0.6°，向上为增加，向下为减少
+  const DEG_PER_PX = 0.6;
+
+  function dragPhase(p) {
+    const i = st.rotating.slot;
+    const dy = st.rotating.y0 - p.y;       // 向上为正
+    applyPhase(i, st.rotating.p0 + (dy * DEG_PER_PX * Math.PI) / 180);
+  }
+
+  function applyPhase(i, phase) {
+    const s = st.slots[i];
+    if (!s) return;
+    let ph = phase % (Math.PI * 2);
+    if (ph < 0) ph += Math.PI * 2;
+
+    const L = LEVELS[st.level];
+    const target = L.target.find((t) => t.f === s.f);
+    if (target) {
+      let d = ph - target.phase;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      if (Math.abs(d) < 0.14) ph = target.phase;   // 约 8° 内吸附
+    }
+    const changed = Math.abs(ph - s.phase) > 0.08;
+    s.phase = ph;
+    updateMatch();
+    if (changed) Sound.phaseRun(s.f);
+  }
+
+  function setPhaseDegrees(i, deg) {
+    applyPhase(i, (deg * Math.PI) / 180);   // applyPhase 里会做 0–360 环绕与吸附
+  }
+
+  function cast() {
+    if (st.won || st.match < PASS) {
+      st.hintFlash = 0.6;
+      return;
+    }
+    st.won = true;
+    st.wonAt = st.time;
+    st.burst = null;
+    Sound.victory(st.level, playerComps());
+  }
+
+  function onKey(e) {
+    Sound.resume();
+    if (st.finale) {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        loadLevel(0);
+      } else if (e.key === '7' || e.key === '8') {
+        Sound.init();
+        st.finale = false;
+        loadLevel(e.key === '7' ? MAIN : MAIN + 1);
+      }
+      return;
+    }
+
+
+    if (e.key === 'Escape') return;
+    if (st.won) {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        if (isLast()) {
+          startFinale();
+        } else if (st.level === LEVELS.length - 1) {
+          Sound.init();
+          loadLevel(0);
+        } else {
+          Sound.init();
+          loadLevel(st.level + 1);
+        }
+      }
+      return;
+    }
+
+    if (e.key === ' ') {
+      e.preventDefault();
+      cast();
+    } else if (e.key === 'r' || e.key === 'R') {
+      loadLevel(st.level);
+    } else if (/^[1-9]$/.test(e.key)) {
+      // 数字键 = 选关
+      const idx = Number(e.key) - 1;
+      if (idx < LEVELS.length) {
+        Sound.init();
+        loadLevel(idx);
+      }
+    } else if (e.key === 'Backspace') {
+      const slot = st.slots.map((s, i) => (s ? i : -1)).filter((i) => i >= 0).pop();
+      if (slot >= 0) {
+        removeFromSlot(slot);
+        updateMatch();
+      }
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      // 上下箭头：每次 1°，按住由系统自动重复，限速 25°/秒
+      e.preventDefault();
+      const slot = selectedSlot();
+      if (slot < 0) return;
+      const now = performance.now();
+      if (e.repeat && now - lastArrowAt < 40) return;
+      lastArrowAt = now;
+      const dir = e.key === 'ArrowUp' ? 1 : -1;
+      const cur = (st.slots[slot].phase * 180) / Math.PI;
+      setPhaseDegrees(slot, cur + dir);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      // 左右箭头：在已放置的卡片之间切换
+      e.preventDefault();
+      const occupied = st.slots.map((s, i) => (s ? i : -1)).filter((i) => i >= 0);
+      if (!occupied.length) return;
+      let k = occupied.indexOf(st.selected);
+      if (k < 0) k = e.key === 'ArrowRight' ? -1 : 0;
+      const next = (k + (e.key === 'ArrowRight' ? 1 : -1) + occupied.length) % occupied.length;
+      st.selected = occupied[next];
+      if (st.slots[st.selected]) {
+        Sound.play(st.slots[st.selected].f, { gain: 0.06 });
+      }
+    } else if (e.key === '[' || e.key === ']') {
+      // 选中槽的相位微调：1°，Shift 为 0.2°
+      const slot = selectedSlot();
+      if (slot >= 0) {
+        const fine = e.shiftKey ? 0.2 : 1;
+        const cur = (st.slots[slot].phase * 180) / Math.PI;
+        setPhaseDegrees(slot, cur + (e.key === ']' ? fine : -fine));
+      }
+    }
+  }
+
+  let lastArrowAt = 0;
+
+  function selectedSlot() {
+    if (st.selected >= 0 && st.slots[st.selected]) return st.selected;
+    const i = st.slots.findIndex((s) => s);
+    return i;
+  }
+
+  function onWheel(e) {
+    if (st.won) return;
+    const p = pointerPos(e);
+    const rects = slotRects();
+    for (let i = 0; i < rects.length; i++) {
+      if (!st.slots[i] || !inRect(p, rects[i], 12)) continue;
+      const fine = e.shiftKey ? 0.2 : 1.5;
+      const cur = (st.slots[i].phase * 180) / Math.PI;
+      setPhaseDegrees(i, cur - Math.sign(e.deltaY) * fine);
+      st.selected = i;
+      e.preventDefault();
+      break;
+    }
+  }
+
+  // ---------------------------------------------------------------- 主循环
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    st.time += dt;
+    if (st.hintFlash > 0) st.hintFlash -= dt;
+    if (st.finale) updateFinale(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    // 抓住指针：拖出画布再松手，up 事件也还回到画布，卡片不会粘在鼠标上
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    onDown(e);
+  });
+  canvas.addEventListener('pointermove', onMove);
+  canvas.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointercancel', onUp);
+
+  // 兜底：窗口层面也收一次，防止指针在画布外松开导致拖拽状态残留
+  window.addEventListener('pointerup', (e) => {
+    if (st.drag || st.rotating) onUp(e);
+  });
+  window.addEventListener('pointercancel', (e) => {
+    if (st.drag || st.rotating) onUp(e);
+  });
+  window.addEventListener('blur', () => {
+    if (st.drag || st.rotating) {
+      st.drag = null;
+      st.rotating = null;
+      st.hoverSlot = -1;
+      canvas.style.cursor = 'default';
+    }
+  });
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  window.addEventListener('keydown', onKey);
+
+  layout();
+  loadLevel(0);
+  updateMatch();
+
+  // ---------------------------------------------------------------- 测试钩子
+  const params = new URLSearchParams(location.search);
+  if (params.has('l')) loadLevel(Number(params.get('l')) - 1);
+  if (params.has('solve')) {
+    const L = LEVELS[st.level];
+    L.target.forEach((t, i) => {
+      if (i < st.slots.length) {
+        const deckIdx = st.deck.findIndex((c) => c.f === t.f);
+        if (deckIdx >= 0) placeCard(deckIdx, i);
+        if (st.slots[i]) st.slots[i].phase = t.phase;
+      }
+    });
+    updateMatch();
+  }
+  if (params.has('demo')) {
+    const L = LEVELS[st.level];
+    L.deck.forEach((c, i) => {
+      if (i < st.slots.length) placeCard(i, i);
+    });
+    st.slots.forEach((s) => {
+      if (!s) return;
+      const t = L.target.find((x) => x.f === s.f);
+      s.phase = (t ? t.phase : 0) + 0.85;
+    });
+    updateMatch();
+  }
+  if (params.has('finale')) {
+    loadLevel(LEVELS.length - 1);
+    st.won = true;
+    st.wonAt = st.time - 2;
+    startFinale();
+    st.finaleAt = st.time - 3;
+    for (let i = 0; i < 160; i++) updateFinale(1 / 60);
+  }
+  if (params.has('won')) {
+    cast();
+    st.wonAt = st.time - 0.6;
+  }
+  if (params.has('seal')) {
+    cast();
+    st.wonAt = st.time - 0.05;
+  }
+  if (params.has('burst')) {
+    cast();
+    st.wonAt = st.time - 0.55;
+  }
+
+  if (params.has('selftest')) {
+    const out = document.getElementById('out');
+    const lines = [];
+    const ok = (cond, msg) => lines.push((cond ? 'PASS ' : 'FAIL ') + msg);
+
+    // 1. 目标曲线可由自身得到 100%
+    LEVELS.forEach((L, i) => {
+      const m = matchRatio(L.target, L.target);
+      ok(m > 0.999, `level ${i + 1} target self-match = ${(m * 100).toFixed(1)}%`);
+    });
+
+    // 2. 卡池必须包含目标频率
+    LEVELS.forEach((L, i) => {
+      const missing = L.target.filter((t) => !L.deck.some((c) => c.f === t.f));
+      ok(missing.length === 0, `level ${i + 1} deck covers target freqs`);
+    });
+
+    // 3. 空槽 / 错卡应低于阈值
+    LEVELS.forEach((L, i) => {
+      const wrong = L.deck.find((c) => !L.target.some((t) => t.f === c.f));
+      if (wrong) {
+        const m = matchRatio([{ ...wrong, phase: 0 }], L.target);
+        ok(m < PASS, `level ${i + 1} distractor scores ${(m * 100).toFixed(1)}% < ${PASS * 100}%`);
+      }
+    });
+
+    // 4. 正确组合 = 100%
+    LEVELS.forEach((L, i) => {
+      const m = matchRatio(L.target, L.target);
+      ok(m > 0.999, `level ${i + 1} exact solution = ${(m * 100).toFixed(1)}%`);
+    });
+
+    // 5. 相位偏 4°（吸附范围内）仍应通过
+    LEVELS.forEach((L, i) => {
+      const comps = L.target.map((t) => ({ ...t }));
+      comps[0].phase += (4 * Math.PI) / 180;
+      const m = matchRatio(comps, L.target);
+      ok(m > PASS, `level ${i + 1} 4° error still passes (${(m * 100).toFixed(1)}%)`);
+    });
+
+    // 6. 选错一张卡（用卡池里的干扰项替换）必须失败
+    LEVELS.forEach((L, i) => {
+      const wrong = L.deck.find((c) => !L.target.some((t) => t.f === c.f));
+      if (!wrong || L.target.length === 0) return;
+      const comps = L.target.slice(1).map((t) => ({ ...t }));
+      comps.push({ f: wrong.f, a: wrong.a, phase: 0 });
+      const m = matchRatio(comps, L.target);
+      ok(m < PASS, `level ${i + 1} wrong card combo = ${(m * 100).toFixed(1)}% < ${PASS * 100}%`);
+    });
+
+    // 7. 输入链路：模拟鼠标把卡拖进槽、再转到目标相位
+    (function () {
+      loadLevel(0);
+      const dr = deckRects()[0];
+      const sr = slotRects()[0];
+      const p1 = { clientX: (dr.x + dr.w / 2) * scale + ox, clientY: (dr.y + dr.h / 2) * scale + oy };
+      const p2 = { clientX: (sr.x + sr.w / 2) * scale + ox, clientY: (sr.y + sr.h / 2) * scale + oy };
+      onDown(p1);
+      onMove(p2);
+      onUp(p2);
+      ok(!!st.slots[0], 'input: drag a card into the slot');
+
+      const center = slotCenter(0);
+      const tp = LEVELS[0].target[0].phase;
+      st.slots[0].phase = 0;
+      const dyPx = (tp * 180) / Math.PI / 0.6;   // 向上拖这么多像素
+      const ev = (x, y) => ({ clientX: x * scale + ox, clientY: y * scale + oy, pointerId: 1 });
+      onDown(ev(center.x, center.y));
+      onMove(ev(center.x, center.y - dyPx));
+      onUp(ev(center.x, center.y - dyPx));
+      ok(st.match > 0.97, `input: vertical drag sets target phase (${(st.match * 100).toFixed(1)}%)`);
+    })();
+
+    // 8. 拖一张卡到已占用的槽位 = 直接替换
+    (function () {
+      loadLevel(1);
+      placeCard(0, 0);
+      updateMatch();
+      const before = st.slots[0].f;
+
+      const dr = deckRects()[2];
+      const sr = slotRects()[0];
+      const p1 = { clientX: (dr.x + dr.w / 2) * scale + ox, clientY: (dr.y + dr.h / 2) * scale + oy };
+      const p2 = { clientX: (sr.x + sr.w / 2) * scale + ox, clientY: (sr.y + sr.h / 2) * scale + oy };
+      onDown(p1);
+      onMove(p2);
+      onUp(p2);
+
+      ok(
+        st.slots[0] && st.slots[0].f !== before && st.deck[0].used === false,
+        `input: drop on occupied slot replaces (${before}× → ${st.slots[0] ? st.slots[0].f : '-'}×)`
+      );
+    })();
+
+    // 11. 上下箭头调相位、左右箭头换卡
+    (function () {
+      const key = (k, repeat = false) => ({ key: k, repeat, preventDefault() {} });
+      loadLevel(0);
+      placeCard(0, 0);
+      st.slots[0].phase = 0;
+      for (let i = 0; i < 3; i++) onKey(key('ArrowUp'));
+      let deg = ((st.slots[0].phase * 180) / Math.PI) % 360;
+      ok(Math.abs(deg - 3) < 0.01, `input: ArrowUp ×3 = 3° (${deg.toFixed(1)}°)`);
+
+      for (let i = 0; i < 5; i++) onKey(key('ArrowDown'));
+      deg = (((st.slots[0].phase * 180) / Math.PI) % 360 + 360) % 360;
+      ok(Math.abs(deg - 358) < 0.01, `input: ArrowDown ×5 wraps to 358° (${deg.toFixed(1)}°)`);
+
+      loadLevel(1);
+      placeCard(0, 0);
+      placeCard(1, 1);
+      st.selected = 0;
+      onKey(key('ArrowRight'));
+      ok(st.selected === 1, 'input: ArrowRight selects the next card');
+      onKey(key('ArrowLeft'));
+      ok(st.selected === 0, 'input: ArrowLeft selects the previous card');
+    })();
+    // 10. 数字键选关
+    (function () {
+      loadLevel(0);
+      onKey({ key: '4', preventDefault() {} });
+      ok(st.level === 3, `input: digit key jumps to level 4 (now ${st.level + 1})`);
+      loadLevel(0);
+    })();
+
+    // 5b. 拖拽落地：合成 pointer 事件，确认能放下、且不残留拖拽状态
+    (function () {
+      loadLevel(3);
+      const rect = canvas.getBoundingClientRect();
+      const clientOf = (x, y) => ({
+        clientX: rect.left + x * scale + ox,
+        clientY: rect.top + y * scale + oy,
+      });
+      const d = deckRects()[0];
+      const s0 = slotRects()[0];
+      const from = clientOf(d.x + d.w / 2, d.y + d.h / 2);
+      const to = clientOf(s0.x + s0.w / 2, s0.y + s0.h / 2);
+      const ev = (type, c, buttons) =>
+        canvas.dispatchEvent(new PointerEvent(type, Object.assign({ pointerId: 1, buttons, bubbles: true, cancelable: true }, c)));
+
+      ev('pointerdown', from, 1);
+      ev('pointermove', to, 1);
+      let upErr = '';
+      try {
+        onUp({ clientX: to.clientX, clientY: to.clientY });
+      } catch (e) {
+        upErr = String(e && e.message ? e.message : e) + ' @ ' + String(e && e.stack ? e.stack.split('\n')[1] : '');
+      }
+      ok(!!st.slots[0], 'input: drag from deck, drop into slot 1');
+      ok(st.drag === null, 'input: drag state cleared after drop' + (upErr ? ' [' + upErr + ']' : ''));
+
+      // 在画布外松手：拖拽状态也不能残留
+      ev('pointerdown', from, 1);
+      ev('pointermove', clientOf(-80, -80), 1);
+      window.dispatchEvent(new PointerEvent('pointerup', { clientX: rect.left - 60, clientY: rect.top - 60, pointerId: 1, bubbles: true }));
+      ok(st.drag === null, 'input: release outside canvas ends the drag');
+      loadLevel(0);
+    })();
+    // 9. 音频合成：拨弦缓冲必须真的有声音
+    (function () {
+      Sound.init();
+      if (!Sound.ctx) {
+        ok(true, 'audio: no AudioContext in this environment (skipped)');
+        return;
+      }
+      const buf = Sound.pluckBuffer(1, 0);
+      const d = buf.getChannelData(0);
+      let sum = 0;
+      for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
+      const rms = Math.sqrt(sum / d.length);
+      ok(rms > 0.05, `audio: guitar pluck rms=${rms.toFixed(3)}`);
+
+      let threw = false;
+      try {
+        Sound.run(1, 0);
+        Sound.play(1, { inst: 'piano' });
+        Sound.play(1, { inst: 'guzheng' });
+        Sound.strum([{ f: 1 }, { f: 2 }], 0);
+        Sound.victory(0, [{ f: 1 }]);
+        Sound.flute(2, { gain: 0.01 });
+      } catch (e) {
+        threw = true;
+      }
+      ok(!threw, 'audio: guitar + run + strum + flute run without throwing');
+      ok(LEVELS.every((L) => typeof Sound[L.timbre] === 'function'), 'audio: every level timbre has a synth');
+    })();
+
+    const failed = lines.filter((l) => l.startsWith('FAIL')).length;
+    lines.push(`FAILED: ${failed}`);
+    window.__selftest = lines;
+    out.textContent = lines.join('\n');
+    out.style.display = 'none';
+  }
+
+  requestAnimationFrame(frame);
+
+  // 提前建好音频上下文：new AudioContext() 要 ~200 ms（音频设备初始化），
+  // 放到首帧之后空闲时做，第一次放卡就不会卡一下再出声。
+  const warmAudio = () => {
+    Sound.init();
+    if (Sound.ctx && Sound.ctx.state === 'suspended') Sound.resume();
+  };
+  setTimeout(warmAudio, 200);
+  if (window.requestIdleCallback) requestIdleCallback(warmAudio, { timeout: 1500 });
+})();
+
+</script>
+</body>
+</html>

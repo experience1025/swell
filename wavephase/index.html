@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>波相 · Wavephase</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #FBFAF6; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const W = 1600, H = 900;
+
+  const PAPER = '#FBFAF6';
+  const INK = '#1A222E';
+  const SOFT = '#7A8290';
+  const FAINT = '#B4BAC4';
+  const LINE = '#E4E0D7';
+  const ACCENT = '#CF4824';
+  const ACCENT_SOFT = '#E89E80';
+  const DEEP = '#C0392B';
+  const FONT = '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif';
+
+  const Y0 = 450, X0 = 80, X_MAX = 1520;
+  const A_MIN = 0, A_MAX = 300;
+  const LAM_MIN = 220, LAM_MAX = 820;
+  const PHI_MIN = -Math.PI, PHI_MAX = Math.PI;
+
+  const BASE = { a: 195, lam: 560, phi: 0.55 };
+  const LIT = 0.65;
+  const WIN_HOLD = 0.55;
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let dpr = 1, scale = 1, ox = 0, oy = 0;
+
+  function layout() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = window.innerWidth, h = window.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    scale = Math.min(w / W, h / H);
+    ox = (w - W * scale) / 2;
+    oy = (h - H * scale) / 2;
+  }
+  window.addEventListener('resize', layout);
+
+  const ringY = (x, a, lam, phi) => a * Math.sin((2 * Math.PI * (x - X0)) / lam + phi);
+  const ringAt = (x, r = 28) => ({ x, y: ringY(x, BASE.a, BASE.lam, BASE.phi), r });
+
+  const LEVELS = [
+    {
+      name: '初见', rings: [ringAt(760)],
+      a: 110, lam: BASE.lam, phi: 0.55, lockLam: true, lockPhi: true,
+      hint: '拖动下方的「振幅」，让波峰穿过圆环',
+    },
+    {
+      name: '相位', rings: [ringAt(760), ringAt(1240)],
+      a: 110, lam: BASE.lam, phi: -1.15, lockLam: true,
+      hint: '两个环要同时亮：先定振幅，再用相位左右平移',
+    },
+    {
+      name: '波长', rings: [ringAt(300), ringAt(1000)],
+      a: 110, lam: 420, phi: 0,
+      hint: '波长决定波峰之间的距离，滚轮可以微调',
+    },
+    {
+      name: '三环', rings: [ringAt(760), ringAt(1000), ringAt(1240)],
+      a: 150, lam: 650, phi: -0.65,
+      hint: '三个环同时穿过，需要振幅、波长、相位一起配合',
+    },
+    {
+      name: '细调', rings: [ringAt(300, 17), ringAt(1000, 17), ringAt(1240, 17)],
+      a: 120, lam: 480, phi: 1.05,
+      hint: '环变小了，按住 Shift 滚轮可以更慢地微调',
+    },
+    {
+      name: '自由', sandbox: true,
+      a: 110, lam: BASE.lam, phi: 0,
+      hint: '自由模式：圆环随机生成、保证有解 · R 换一组 · 1–5 回到关卡',
+    },
+  ];
+
+  const st = {
+    level: 0, a: 110, lam: 560, phi: 0,
+    won: false, wonAt: 0, hold: 0, t: 0, startAt: 0,
+    pulses: [], dragging: -1, hover: -1, litPrev: [],
+  };
+
+  function randomRings() {
+    const a = 150 + Math.random() * 108;
+    const lam = 330 + Math.random() * 430;
+    const phi = (Math.random() * 2 - 1) * Math.PI;
+    const count = 4;
+    const lo = 240, hi = 1370;
+    const seg = (hi - lo) / count;
+    const rings = [];
+    for (let i = 0; i < count; i++) {
+      const x = lo + seg * i + (0.3 + Math.random() * 0.4) * seg;
+      rings.push({ x, y: ringY(x, a, lam, phi), r: 19 + Math.random() * 7 });
+    }
+    return rings;
+  }
+
+  function loadLevel(i) {
+    st.level = Math.max(0, Math.min(LEVELS.length - 1, i));
+    const L = LEVELS[st.level];
+    if (L.sandbox) L.rings = randomRings();
+    st.a = L.a;
+    st.lam = L.lam;
+    st.phi = L.phi;
+    st.won = false;
+    st.hold = 0;
+    st.pulses = [];
+    st.startAt = st.t;
+    st.litPrev = L.rings.map(() => false);
+  }
+
+  const wave = (x) => st.a * Math.sin((2 * Math.PI * (x - X0)) / st.lam + st.phi);
+  const dist = (ring) => Math.abs(wave(ring.x) - ring.y);
+  const isLit = (ring) => dist(ring) <= ring.r * LIT;
+  const fillOf = (ring) => Math.max(0, Math.min(1, 1 - dist(ring) / (ring.r * 1.35)));
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else {
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+  }
+
+  function text(str, x, y, size, color, align = 'left', bold = false) {
+    ctx.font = `${bold ? '600 ' : ''}${size}px ${FONT}`;
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(str, x, y);
+  }
+
+  function draw() {
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, W, H);
+
+    drawHeader();
+    drawGrid();
+    drawRings();
+    drawCurve();
+    drawSliders();
+    drawHint();
+    if (!LEVELS[st.level].sandbox) drawProgress();
+    if (st.won) drawWin();
+  }
+
+  function drawHeader() {
+    text('波相', 96, 80, 44, INK, 'left', true);
+    text('W A V E P H A S E', 100, 112, 12, FAINT);
+    text('拖动参数，让曲线同时穿过所有圆环', 300, 76, 16, SOFT);
+
+    const L = LEVELS[st.level];
+    if (L.sandbox) {
+      text('自由模式', W - 96, 76, 22, ACCENT, 'right', true);
+    } else {
+      text(L.name, W - 96, 76, 26, INK, 'right', true);
+      text(`${String(st.level + 1).padStart(2, '0')} / 0${LEVELS.length}`, W - 96, 104, 13, FAINT, 'right');
+    }
+
+    ctx.strokeStyle = LINE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(96, 136);
+    ctx.lineTo(W - 96, 136);
+    ctx.stroke();
+  }
+
+  function drawGrid() {
+    const ay = Y0;
+    const xEnd = X_MAX + 16;
+
+    ctx.strokeStyle = 'rgba(26,34,46,0.32)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(X0 - 18, ay);
+    ctx.lineTo(xEnd, ay);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(xEnd - 8, ay - 4);
+    ctx.lineTo(xEnd, ay);
+    ctx.lineTo(xEnd - 8, ay + 4);
+    ctx.stroke();
+  }
+  function drawRings() {
+    const L = LEVELS[st.level];
+    for (const ring of L.rings) {
+      const cy = Y0 - ring.y;
+      const lit = isLit(ring);
+
+      ctx.strokeStyle = 'rgba(26,34,46,0.16)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(ring.x, cy);
+      ctx.lineTo(ring.x, Y0);
+      ctx.stroke();
+
+      if (lit) {
+        const p = 0.5 + 0.5 * Math.sin(st.t * 6);
+        ctx.strokeStyle = `rgba(207,72,36,${(0.55 + 0.35 * p).toFixed(2)})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(ring.x, cy, ring.r * (1 + 0.04 * p), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = ACCENT;
+        ctx.beginPath();
+        ctx.arc(ring.x, cy, 4, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = 'rgba(26,34,46,0.45)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(ring.x, cy, ring.r, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const f = fillOf(ring);
+        if (f > 0.02) {
+          ctx.strokeStyle = ACCENT_SOFT;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(ring.x, cy, ring.r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f, false);
+          ctx.stroke();
+        }
+      }
+    }
+
+    for (const p of st.pulses) {
+      const k = p.age / 0.7;
+      ctx.strokeStyle = `rgba(207,72,36,${((1 - k) * 0.5).toFixed(3)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, Y0 - p.y, p.r * (1 + k * 1.6), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function drawCurve() {
+    const pts = [];
+    for (let i = 0; i <= 640; i++) {
+      const x = X0 + ((X_MAX - X0) * i) / 640;
+      pts.push({ x, y: Y0 - wave(x) });
+    }
+
+    ctx.strokeStyle = 'rgba(26,34,46,0.14)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(X0, Y0);
+    ctx.lineTo(X_MAX, Y0);
+    ctx.stroke();
+
+    ctx.strokeStyle = DEEP;
+    ctx.lineWidth = 2.6;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.stroke();
+
+    const u = (st.t * 0.12) % 1;
+    const bx = X0 + (X_MAX - X0) * u;
+    ctx.fillStyle = ACCENT;
+    ctx.beginPath();
+    ctx.arc(bx, Y0 - wave(bx), 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const GROUPS = [
+    { x: 120, label: '振幅', sym: 'A', min: A_MIN, max: A_MAX, key: 'a', fmt: (v) => `${Math.round(v)} px` },
+    { x: 620, label: '波长', sym: 'λ', min: LAM_MIN, max: LAM_MAX, key: 'lam', fmt: (v) => `${Math.round(v)} px` },
+    { x: 1120, label: '相位', sym: 'φ', min: PHI_MIN, max: PHI_MAX, key: 'phi', fmt: (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}` },
+  ];
+  const TRACK_Y = 818, TRACK_W = 300;
+
+  function isLocked(i) {
+    const L = LEVELS[st.level];
+    return (i === 1 && L.lockLam) || (i === 2 && L.lockPhi);
+  }
+
+  function drawSliders() {
+    ctx.strokeStyle = LINE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(96, 770);
+    ctx.lineTo(W - 96, 770);
+    ctx.stroke();
+
+    GROUPS.forEach((g, i) => {
+      const locked = isLocked(i);
+      const v = st[g.key];
+      const k = (v - g.min) / (g.max - g.min);
+      const kx = g.x + TRACK_W * k;
+
+      text(g.label, g.x, 800, 16, locked ? FAINT : INK);
+      text(g.sym, g.x + 46, 800, 13, FAINT);
+      text(g.fmt(v), g.x + TRACK_W, 800, 16, locked ? FAINT : INK, 'right');
+
+      ctx.strokeStyle = locked ? '#E0DCD2' : '#D0CCC2';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(g.x, TRACK_Y);
+      ctx.lineTo(g.x + TRACK_W, TRACK_Y);
+      ctx.stroke();
+
+      if (!locked) {
+        ctx.strokeStyle = ACCENT_SOFT;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(g.x, TRACK_Y);
+        ctx.lineTo(kx, TRACK_Y);
+        ctx.stroke();
+
+        ctx.fillStyle = PAPER;
+        ctx.beginPath();
+        ctx.arc(kx, TRACK_Y, 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = st.dragging === i || st.hover === i ? ACCENT : ACCENT_SOFT;
+        ctx.beginPath();
+        ctx.arc(kx, TRACK_Y, 7, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = '#DAD5CA';
+        ctx.beginPath();
+        ctx.arc(kx, TRACK_Y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        text('锁定', g.x + TRACK_W + 14, TRACK_Y + 5, 13, FAINT);
+      }
+    });
+  }
+
+  function drawHint() {
+    const L = LEVELS[st.level];
+    text(L.hint, W / 2, 864, 15, SOFT, 'center');
+    text('1–5 选关   ·   0 自由模式   ·   滚轮 微调   ·   R 重来', W - 96, 890, 15, FAINT, 'right');
+  }
+
+  function drawProgress() {
+    const total = LEVELS.length - 1;
+    const x0 = W - 96 - total * 22;
+    for (let i = 0; i < total; i++) {
+      const cx = x0 + i * 22;
+      ctx.beginPath();
+      if (i < st.level) {
+        ctx.fillStyle = INK;
+        ctx.arc(cx, 118, 4, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (i === st.level) {
+        ctx.fillStyle = ACCENT;
+        ctx.arc(cx, 118, 5, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = FAINT;
+        ctx.lineWidth = 1;
+        ctx.arc(cx, 118, 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawWin() {
+    const age = st.t - st.wonAt;
+    const veil = Math.min(1, age / 0.25);
+    ctx.fillStyle = `rgba(251,250,246,${(0.96 * veil).toFixed(3)})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // 通关瞬间：主曲线向上、向下扩散出一层层更浅的复制波，最后一起消失
+    if (age < 2.4) {
+      const k = Math.min(1, age / 1.9);
+      const N = 7;
+      const mix = (c1, c2, t) => {
+        const p1 = [1, 3, 5].map((i) => parseInt(c1.substr(i, 2), 16));
+        const p2 = [1, 3, 5].map((i) => parseInt(c2.substr(i, 2), 16));
+        return `rgb(${p1.map((v, i) => Math.round(v + (p2[i] - v) * t)).join(',')})`;
+      };
+
+      for (let i = N; i >= 1; i--) {
+        const alpha = Math.pow(1 - k, 1.3) * (0.5 - i * 0.045);
+        if (alpha <= 0.004) continue;
+
+        const spread = i * 34 * k;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = mix('#C0392B', '#FBFAF6', i / (N + 1));
+        ctx.lineWidth = Math.max(0.7, 2.4 - i * 0.16);
+
+        for (const dir of [-1, 1]) {
+          ctx.beginPath();
+          for (let j = 0; j <= 360; j++) {
+            const x = X0 + ((X_MAX - X0) * j) / 360;
+            const wobble = 1 + 0.12 * Math.sin(x * 0.004 + age * 1.6 + i);
+            const y = Y0 - wave(x) + dir * spread * wobble;
+            j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 主曲线本身：先亮后淡
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - k * 1.15);
+      ctx.strokeStyle = '#C0392B';
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      for (let j = 0; j <= 360; j++) {
+        const x = X0 + ((X_MAX - X0) * j) / 360;
+        const y = Y0 - wave(x);
+        j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    const ta = Math.max(0, Math.min(1, (age - 0.25) / 0.4));
+    if (ta <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = ta;
+    text('通关', W / 2, 400, 56, INK, 'center', true);
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W / 2 - 26, 384);
+    ctx.lineTo(W / 2 + 26, 384);
+    ctx.stroke();
+    text('用时 ' + (st.wonAt - st.startAt).toFixed(1) + ' 秒', W / 2, 450, 17, SOFT, 'center');
+    text(st.level === LEVELS.length - 2 ? '空格 完成' : '空格 继续', W / 2, 512, 15, ACCENT, 'center');
+    ctx.restore();
+  }
+  function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left - ox) / scale, y: (e.clientY - r.top - oy) / scale };
+  }
+
+  function setFromX(i, x) {
+    const g = GROUPS[i];
+    const k = Math.max(0, Math.min(1, (x - g.x) / TRACK_W));
+    st[g.key] = g.min + (g.max - g.min) * k;
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const p = pos(e);
+    for (let i = 0; i < 3; i++) {
+      if (isLocked(i)) continue;
+      if (p.y > 780 && p.y < 850 && p.x > GROUPS[i].x - 18 && p.x < GROUPS[i].x + TRACK_W + 18) {
+        st.dragging = i;
+        setFromX(i, p.x);
+        return;
+      }
+    }
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    const p = pos(e);
+    if (st.dragging >= 0) {
+      setFromX(st.dragging, p.x);
+      return;
+    }
+    st.hover = -1;
+    for (let i = 0; i < 3; i++) {
+      if (isLocked(i)) continue;
+      if (p.y > 780 && p.y < 850 && p.x > GROUPS[i].x - 18 && p.x < GROUPS[i].x + TRACK_W + 18) st.hover = i;
+    }
+    canvas.style.cursor = st.hover >= 0 ? 'ew-resize' : 'default';
+  });
+
+  canvas.addEventListener('pointerup', () => (st.dragging = -1));
+  canvas.addEventListener('pointercancel', () => (st.dragging = -1));
+
+  canvas.addEventListener('wheel', (e) => {
+    if (isLocked(1)) return;
+    e.preventDefault();
+    const fine = e.shiftKey ? 2 : 12;
+    st.lam = Math.max(LAM_MIN, Math.min(LAM_MAX, st.lam + Math.sign(e.deltaY) * fine));
+  }, { passive: false });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (st.won && st.level + 1 < LEVELS.length) loadLevel(st.level + 1);
+      return;
+    }
+    if (e.key === 'r' || e.key === 'R') {
+      loadLevel(st.level);
+      return;
+    }
+    if (/^[0-5]$/.test(e.key)) {
+      const i = Number(e.key) === 0 ? LEVELS.length - 1 : Number(e.key) - 1;
+      loadLevel(i);
+    }
+  });
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (!frozen) st.t += dt;
+
+    const L = LEVELS[st.level];
+    if (!st.won && !L.sandbox) {
+      const all = L.rings.every(isLit);
+      st.hold = all ? st.hold + dt : 0;
+      if (all && st.hold >= WIN_HOLD) {
+        st.won = true;
+        st.wonAt = st.t;
+      }
+    }
+
+    L.rings.forEach((ring, i) => {
+      const lit = isLit(ring);
+      if (lit && !st.litPrev[i]) st.pulses.push({ x: ring.x, y: ring.y, r: ring.r, age: 0 });
+      st.litPrev[i] = lit;
+    });
+    for (const p of st.pulses) p.age += dt;
+    st.pulses = st.pulses.filter((p) => p.age < 0.7);
+
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  function runSelftest() {
+    const lines = [];
+    const ok = (c, m) => lines.push((c ? 'PASS ' : 'FAIL ') + m);
+
+    LEVELS.slice(0, 5).forEach((L, i) => {
+      const solved = L.rings.every((r) => Math.abs(ringY(r.x, BASE.a, BASE.lam, BASE.phi) - r.y) <= r.r * LIT);
+      ok(solved, `level ${i + 1} base solution lights every ring`);
+      const inside = L.rings.every((r) => Math.abs(r.y) + r.r < 300);
+      ok(inside, `level ${i + 1} rings inside the canvas`);
+    });
+
+    let allInside = true;
+    for (let k = 0; k < 40; k++) {
+      const rings = randomRings();
+      if (!rings.every((r) => Math.abs(r.y) + r.r < 300)) allInside = false;
+    }
+    ok(allInside, 'sandbox rings stay inside the canvas');
+
+    lines.push('FAILED: ' + lines.filter((l) => l.startsWith('FAIL')).length);
+    return lines;
+  }
+
+  const params = new URLSearchParams(location.search);
+  const frozen = params.has('freeze');
+  window.__demoWin = params.has('win');
+  window.addEventListener('resize', layout);
+  layout();
+  loadLevel(params.has('l') ? Number(params.get('l')) - 1 : 0);
+  if (window.__demoWin) {
+    st.a = BASE.a;
+    st.lam = BASE.lam;
+    st.phi = BASE.phi;
+    st.won = true;
+    st.wonAt = st.t - 0.85;
+    st.startAt = st.t - 8.4;
+  }
+
+  if (params.has('selftest')) {
+    const lines = runSelftest();
+    window.__selftest = lines;
+    const paint = () => {
+      ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+      ctx.fillStyle = PAPER;
+      ctx.fillRect(0, 0, W, H);
+      text('SELFTEST', 60, 70, 24, INK, 'left', true);
+      lines.forEach((l, i) => {
+        text(l, 60, 112 + i * 26, 15, l.startsWith('FAIL') ? ACCENT : '#2E7D5B', 'left');
+      });
+    };
+    paint();
+    requestAnimationFrame(function tick() {
+      paint();
+      requestAnimationFrame(tick);
+    });
+  } else {
+    requestAnimationFrame(frame);
+  }
+})();
+</script>
+</body>
+</html>
