@@ -9,10 +9,23 @@
   body { -webkit-font-smoothing: antialiased; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: default; }
   #out { position: absolute; left: 0; top: 0; margin: 0; font: 12px/1.5 Consolas, monospace; white-space: pre; }
+  .back {
+    position: fixed;
+    left: calc(50% - min(50vw, 88.889vh) + 24px);
+    top: calc(50% - min(50vh, 28.125vw) + 18px);
+    z-index: 10;
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    font: 20px/1 "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #7A8290; text-decoration: none; border-radius: 50%;
+    transition: color .18s ease, background .18s ease;
+  }
+  .back:hover { color: #C0392B; background: rgba(192,57,43,.07); }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<a class="back" href="../swell.html" aria-label="回到 Swell 主页" title="回到 Swell">←</a>
 <pre id="out"></pre>
 <script>
 /* 谐律 · Harmonic — 用三角函数合成和弦

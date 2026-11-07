@@ -38,7 +38,6 @@
   .brand .en { margin-top: 2px; font-size: 12px; letter-spacing: 0.36em; color: var(--faint); }
   .brand .sub { margin-top: 10px; font-size: 15px; color: var(--soft); }
   .meta { text-align: right; font-size: 13px; color: var(--faint); line-height: 1.9; }
-  .kbd { letter-spacing: 0.04em; }
 
   .rule { height: 1px; background: var(--line); margin: 24px 0 38px; }
 
@@ -128,9 +127,6 @@
       <div class="mark">f</div>
       <div class="en">S W E L L</div>
       <div class="sub">两个关于波的小游戏</div>
-    </div>
-    <div class="meta">
-      <div class="kbd">键盘 1 / 2 直接进入</div>
     </div>
   </header>
 
@@ -227,12 +223,6 @@
     card.addEventListener('click', () => openGame(card.dataset.game));
   });
   back.addEventListener('click', closeGame);
-
-  window.addEventListener('keydown', (e) => {
-    if (stage.classList.contains('on')) return;
-    if (e.key === '1') openGame('wave');
-    if (e.key === '2') openGame('harm');
-  });
 
   if (location.hash === '#/wave') openGame('wave');
   if (location.hash === '#/harm') openGame('harm');

@@ -38,6 +38,8 @@
   .brand .en { margin-top: 2px; font-size: 12px; letter-spacing: 0.36em; color: var(--faint); }
   .brand .sub { margin-top: 10px; font-size: 15px; color: var(--soft); }
   .meta { text-align: right; font-size: 13px; color: var(--faint); line-height: 1.9; }
+  .meta a { color: var(--soft); text-decoration: none; border-bottom: 1px solid var(--line); font-size: 18px; letter-spacing: .02em; }
+  .meta a:hover { color: var(--red); border-color: rgba(192,57,43,.4); }
   .kbd { letter-spacing: 0.04em; }
 
   .rule { height: 1px; background: var(--line); margin: 24px 0 38px; }
@@ -108,14 +110,14 @@
       <div class="sub">两个关于波的小游戏</div>
     </div>
     <div class="meta">
-      <div class="kbd">键盘 1 / 2 直接进入</div>
+      <div class="kbd"><a href="fourier.html">波形展柜 →</a></div>
     </div>
   </header>
 
   <div class="rule"></div>
 
   <div class="cards">
-    <a class="card" href="wavephase/index.html" data-key="1">
+    <a class="card" href="wavephase/index.html">
       <div class="num">01</div>
       <div class="preview"><canvas id="p1"></canvas></div>
       <div class="body">
@@ -128,7 +130,7 @@
       </div>
     </a>
 
-    <a class="card" href="harmonic/index.html" data-key="2">
+    <a class="card" href="harmonic/index.html">
       <div class="num">02</div>
       <div class="preview"><canvas id="p2"></canvas></div>
       <div class="body">
@@ -287,11 +289,6 @@
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
-
-  window.addEventListener('keydown', (e) => {
-    if (e.key === '1') location.href = 'wavephase/index.html';
-    if (e.key === '2') location.href = 'harmonic/index.html';
-  });
 })();
 </script>
 </body>
